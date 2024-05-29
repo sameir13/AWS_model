@@ -6,14 +6,13 @@ from transformers import BertTokenizer, TFBertForSequenceClassification, BertCon
 import os
 from flask import Flask, request, jsonify
 
-# Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
 
-# Step 1: Load and Prepare the Data
+app = Flask(__root__)
+
+
 def load_data(file_path):
     try:
         data = pd.read_csv(file_path)
@@ -33,14 +32,11 @@ def load_data(file_path):
         logger.error(f"An error occurred while loading the data: {str(e)}")
         raise
 
-# Replace 'dataset.csv' with the path to your dataset file
 file_path = 'dataset.csv'
 texts, labels = load_data(file_path)
 
-# Split the data into training and validation sets (80% train, 20% validation)
 train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
 
-# Step 2: Tokenize the Data
 def tokenize_data(texts, tokenizer, max_length=128):
     return tokenizer(texts, truncation=True, padding=True, max_length=max_length)
 
@@ -48,7 +44,6 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 train_encodings = tokenize_data(train_texts, tokenizer)
 val_encodings = tokenize_data(val_texts, tokenizer)
 
-# Step 3: Convert to TensorFlow Datasets
 def convert_to_tf_dataset(encodings, labels):
     dataset = tf.data.Dataset.from_tensor_slices((dict(encodings), labels))
     return dataset
@@ -56,11 +51,9 @@ def convert_to_tf_dataset(encodings, labels):
 train_dataset = convert_to_tf_dataset(train_encodings, train_labels)
 val_dataset = convert_to_tf_dataset(val_encodings, val_labels)
 
-# Batch and shuffle the datasets
 train_dataset = train_dataset.shuffle(len(train_dataset)).batch(16)
 val_dataset = train_dataset.batch(16)
 
-# Step 4: Fine-Tune BERT Model
 def build_and_compile_model():
     config = BertConfig.from_pretrained('bert-base-uncased', num_labels=2)
     model = TFBertForSequenceClassification.from_pretrained('bert-base-uncased', config=config)
@@ -77,11 +70,9 @@ except Exception as e:
     logger.error(f"An error occurred during model training: {str(e)}")
     raise
 
-# Save the model
 model.save_pretrained('./fine_tuned_model')
 tokenizer.save_pretrained('./fine_tuned_model')
 
-# Step 5: Evaluate the Model
 try:
     loss, accuracy = model.evaluate(val_dataset)
     logger.info(f'Validation Loss: {loss}')
@@ -90,7 +81,6 @@ except Exception as e:
     logger.error(f"An error occurred during model evaluation: {str(e)}")
     raise
 
-# Step 6: Define a function for AI content detection
 def detect_ai_content(text, model, tokenizer):
     """Detects the likelihood that a given text is AI-generated."""
     try:
@@ -98,12 +88,12 @@ def detect_ai_content(text, model, tokenizer):
         outputs = model(inputs)
         probs = tf.nn.softmax(outputs.logits, axis=-1)
         ai_generated_prob = probs[0][1].numpy()
-        return ai_generated_prob * 100  # Convert to percentage
+        return ai_generated_prob * 100  
     except Exception as e:
         logger.error(f"An error occurred during AI content detection: {str(e)}")
         raise
 
-# Function to load the model for future inference
+
 def load_model(model_path='./fine_tuned_model'):
     try:
         model = TFBertForSequenceClassification.from_pretrained(model_path)
@@ -116,7 +106,7 @@ def load_model(model_path='./fine_tuned_model'):
 
 model, tokenizer = load_model()
 
-# API endpoint for AI content detection
+
 @app.route('/detect', methods=['POST'])
 def detect():
     try:
@@ -143,6 +133,7 @@ def detect():
         logger.error(f"An error occurred in the /detect endpoint: {str(e)}")
         return jsonify({'error': 'An error occurred during detection.'}), 500
 
-# Run the Flask app
+
+
 if __name__ == '__main__':
     app.run(debug=True)
