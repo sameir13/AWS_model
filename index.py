@@ -9,31 +9,48 @@ from flask import Flask, request, jsonify
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
 
-app = Flask(__root__)
-
-
-def load_data(file_path):
+def load_and_unify_datasets(file_path1, file_path2):
     try:
-        data = pd.read_csv(file_path)
-        if 'text' not in data.columns or 'label' not in data.columns:
-            raise ValueError("The dataset must contain 'text' and 'label' columns.")
-        texts = data['text'].tolist()
-        labels = data['label'].tolist()
-        logger.info("Data loaded successfully.")
+        data1 = pd.read_csv(file_path1)
+        data2 = pd.read_csv(file_path2)
+        
+        if 'text' not in data1.columns or 'label' not in data1.columns:
+            raise ValueError(f"The dataset {file_path1} must contain 'text' and 'label' columns.")
+        if 'text' not in data2.columns or 'label' not in data2.columns:
+            raise ValueError(f"The dataset {file_path2} must contain 'text' and 'label' columns.")
+        
+        label_mapping = {
+            'positive': 1, 'good': 1, 
+            'negative': 0, 'bad': 0, 
+            'neutral': 2, 'average': 2
+        }
+        
+        data1['unified_label'] = data1['label'].map(label_mapping)
+        data2['unified_label'] = data2['label'].map(label_mapping)
+        
+        combined_data = pd.concat([data1[['text', 'unified_label']], data2[['text', 'unified_label']]])
+        combined_data.columns = ['text', 'label']
+        
+        texts = combined_data['text'].tolist()
+        labels = combined_data['label'].tolist()
+        
+        logger.info("Datasets loaded and unified successfully.")
         return texts, labels
-    except FileNotFoundError:
-        logger.error(f"File not found: {file_path}")
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {str(e)}")
         raise
-    except pd.errors.ParserError:
-        logger.error("Error parsing the CSV file.")
+    except pd.errors.ParserError as e:
+        logger.error(f"Error parsing the CSV file: {str(e)}")
         raise
     except Exception as e:
-        logger.error(f"An error occurred while loading the data: {str(e)}")
+        logger.error(f"An error occurred while loading the datasets: {str(e)}")
         raise
 
-file_path = 'dataset.csv'
-texts, labels = load_data(file_path)
+file_path1 = 'ai_reviews.csv'
+file_path2 = 'movie_reviews.csv'
+texts, labels = load_and_unify_datasets(file_path1, file_path2)
 
 train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
 
@@ -52,7 +69,7 @@ train_dataset = convert_to_tf_dataset(train_encodings, train_labels)
 val_dataset = convert_to_tf_dataset(val_encodings, val_labels)
 
 train_dataset = train_dataset.shuffle(len(train_dataset)).batch(16)
-val_dataset = train_dataset.batch(16)
+val_dataset = val_dataset.batch(16)
 
 def build_and_compile_model():
     config = BertConfig.from_pretrained('bert-base-uncased', num_labels=2)
@@ -63,8 +80,17 @@ def build_and_compile_model():
 
 model = build_and_compile_model()
 
+class CustomCallback(tf.keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        accuracy = logs.get('accuracy')
+        val_accuracy = logs.get('val_accuracy')
+        loss = logs.get('loss')
+        val_loss = logs.get('val_loss')
+        logger.info(f"Epoch {epoch+1}, Loss: {loss:.4f}, Accuracy: {accuracy:.4f}, "
+                    f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+
 try:
-    model.fit(train_dataset, epochs=3, validation_data=val_dataset)
+    history = model.fit(train_dataset, epochs=3, validation_data=val_dataset, callbacks=[CustomCallback()])
     logger.info("Model training completed successfully.")
 except Exception as e:
     logger.error(f"An error occurred during model training: {str(e)}")
@@ -82,7 +108,6 @@ except Exception as e:
     raise
 
 def detect_ai_content(text, model, tokenizer):
-    """Detects the likelihood that a given text is AI-generated."""
     try:
         inputs = tokenizer(text, return_tensors='tf', truncation=True, padding=True, max_length=128)
         outputs = model(inputs)
@@ -92,7 +117,6 @@ def detect_ai_content(text, model, tokenizer):
     except Exception as e:
         logger.error(f"An error occurred during AI content detection: {str(e)}")
         raise
-
 
 def load_model(model_path='./fine_tuned_model'):
     try:
@@ -106,7 +130,6 @@ def load_model(model_path='./fine_tuned_model'):
 
 model, tokenizer = load_model()
 
-
 @app.route('/detect', methods=['POST'])
 def detect():
     try:
@@ -118,22 +141,25 @@ def detect():
         
         ai_percentage = detect_ai_content(paragraph, model, tokenizer)
         
-        if ai_percentage > = 60:
+        if ai_percentage >= 60:
             result = "Text is AI-generated."
         else:
             result = "Text is human-written."
         
         response = {
             'ai_percentage': ai_percentage,
-            'result': result
+            'result': result,
+            'train_loss': history.history['loss'],
+            'train_accuracy': history.history['accuracy'],
+            'val_loss': history.history['val_loss'],
+            'val_accuracy': history.history['val_accuracy'],
+            'epochs': len(history.history['loss'])
         }
         
         return jsonify(response), 200
     except Exception as e:
         logger.error(f"An error occurred in the /detect endpoint: {str(e)}")
         return jsonify({'error': 'An error occurred during detection.'}), 500
-
-
 
 if __name__ == '__main__':
     app.run(debug=True)
